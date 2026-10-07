@@ -70,7 +70,7 @@ Set-PnPList -Identity $list -EnableVersioning $true -MajorVersions 50 -EnableAtt
 Set-PnPField -List $list -Identity 'Title' -Values @{ Title = 'Site Title'; Required = $false } | Out-Null
 
 Write-Host 'Columns:' -ForegroundColor Cyan
-Add-FieldIfMissing $list 'SiteUrl'             "<Field Type='Text' Name='SiteUrl' StaticName='SiteUrl' DisplayName='Site Url' ID='#ID#' Required='TRUE' Indexed='TRUE' EnforceUniqueValues='TRUE' MaxLength='255' />"
+Add-FieldIfMissing $list 'SiteUrl'             "<Field Type='Text' Name='SiteUrl' StaticName='SiteUrl' DisplayName='Site Url' ID='#ID#' Required='TRUE' Indexed='TRUE' MaxLength='255' />"
 Add-FieldIfMissing $list 'PrimaryOwner'        "<Field Type='Text' Name='PrimaryOwner' StaticName='PrimaryOwner' DisplayName='Primary Owner' ID='#ID#' MaxLength='255' />"
 Add-FieldIfMissing $list 'SecondaryOwners'     "<Field Type='Note' Name='SecondaryOwners' StaticName='SecondaryOwners' DisplayName='Secondary Owners' ID='#ID#' NumLines='3' RichText='FALSE' />"
 Add-FieldIfMissing $list 'CostCenter'          "<Field Type='Text' Name='CostCenter' StaticName='CostCenter' DisplayName='Cost Center' ID='#ID#' MaxLength='50' Indexed='TRUE' />"
@@ -79,17 +79,17 @@ Add-FieldIfMissing $list 'AttestationResult'   "<Field Type='Choice' Name='Attes
 
 Write-Host 'Views:' -ForegroundColor Cyan
 $viewFields = @('ID','LinkTitle','SiteUrl','PrimaryOwner','SecondaryOwners','CostCenter','Modified','LastAttestationDate','Editor','AttestationResult')
-Set-ViewSafe -List $list -Title 'All Items' -Fields $viewFields -Query "<OrderBy><FieldRef Name='SiteUrl' /></OrderBy>"
-Set-ViewSafe -List $list -Title 'Active' -Fields $viewFields -Query "<Where><Neq><FieldRef Name='AttestationResult' /><Value Type='Choice'>Site Deleted</Value></Neq></Where><OrderBy><FieldRef Name='SiteUrl' /></OrderBy>"
+Set-ViewSafe -List $list -Title 'All Items' -Fields $viewFields -Query "<OrderBy><FieldRef Name='Title' /></OrderBy>"
+Set-ViewSafe -List $list -Title 'Active' -Fields $viewFields -Query "<Where><Neq><FieldRef Name='AttestationResult' /><Value Type='Choice'>Site Deleted</Value></Neq></Where><OrderBy><FieldRef Name='Title' /></OrderBy>"
 Set-ViewSafe -List $list -Title 'Attestation Required' -Fields $viewFields -Query "<Where><Eq><FieldRef Name='AttestationResult' /><Value Type='Choice'>Pending</Value></Eq></Where><OrderBy><FieldRef Name='LastAttestationDate' /></OrderBy>"
-Set-ViewSafe -List $list -Title 'Cost Center' -Fields $viewFields -Query "<GroupBy Collapse='TRUE'><FieldRef Name='CostCenter' /></GroupBy><OrderBy><FieldRef Name='SiteUrl' /></OrderBy>"
+Set-ViewSafe -List $list -Title 'Cost Center' -Fields $viewFields -Query "<GroupBy Collapse='TRUE'><FieldRef Name='CostCenter' /></GroupBy><OrderBy><FieldRef Name='Title' /></OrderBy>"
 
 Write-Host 'Sample rows:' -ForegroundColor Cyan
+$have = @{}
+foreach ($it in @(Get-PnPListItem -List $list -PageSize 5000 -Fields 'SiteUrl')) { $have[([string]$it['SiteUrl']).Trim().ToLowerInvariant()] = $true }
 for ($i = 0; $i -lt $SampleSiteUrls.Count; $i++) {
     $url = $SampleSiteUrls[$i]
-    $q = "<View><Query><Where><Eq><FieldRef Name='SiteUrl' /><Value Type='Text'>$url</Value></Eq></Where></Query><RowLimit>1</RowLimit></View>"
-    $hit = @(Get-PnPListItem -List $list -Query $q)
-    if ($hit.Count -gt 0) { Write-Host "  [skip] $url"; continue }
+    if ($have.ContainsKey($url.Trim().ToLowerInvariant())) { Write-Host "  [skip] $url"; continue }
     $leaf = ($url.TrimEnd('/') -split '/')[-1]
     Add-PnPListItem -List $list -Values @{ Title = $leaf; SiteUrl = $url; CostCenter = '0000'; AttestationResult = 'Pending' } | Out-Null
     Write-Host "  [add ] $url" -ForegroundColor Green

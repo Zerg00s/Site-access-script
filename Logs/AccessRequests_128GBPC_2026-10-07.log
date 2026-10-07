@@ -1,2 +1,16 @@
 2026-10-07 14:25:58 Connected. 14 archive column(s) will be copied.
 2026-10-07 14:25:59 idle: 0 open | 0 due | 0 done | 0 failed | 0 scheduled | 0 waiting retry | 0 on another server
+2026-10-07 14:50:26 Connected. 14 archive column(s) will be copied.
+2026-10-07 14:50:29 Tracker: 10804 site URL(s) from 10804 item(s).
+2026-10-07 14:50:31 #5 FAILED Grant (try 1, retry in 2 min): Exception calling "ExecuteQuery" with "0" argument(s): "File Not Found."
+2026-10-07 14:50:32 #4 FAILED Grant (try 1, retry in 2 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-07 14:50:33 #3 GRANTED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-07 14:50:33 3 open | 3 due | 1 done | 2 failed | 0 scheduled | 0 waiting retry | 0 on another server
+2026-10-07 14:51:04 #4 FAILED Grant (try 2, retry in 4 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-07 14:51:04 #5 FAILED Grant (try 2, retry in 4 min): Exception calling "ExecuteQuery" with "0" argument(s): "File Not Found."
+2026-10-07 14:51:04 3 open | 2 due | 0 done | 2 failed | 0 scheduled | 0 waiting retry | 0 on another server
+2026-10-07 14:57:12 Connected. 14 archive column(s) will be copied.
+2026-10-07 14:57:15 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-07 14:57:16 #4 FAILED Grant (try 3, retry in 8 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-07 14:57:17 #5 FAILED Grant (try 3, retry in 8 min): Site 'https://gocleverpointcom.sharepoint.com/sites/TestSite00042' does not exist.
+2026-10-07 14:57:17 3 open | 2 due | 0 done | 2 failed | 0 scheduled | 0 waiting retry | 0 on another server

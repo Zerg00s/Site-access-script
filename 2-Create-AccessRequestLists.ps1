@@ -3,8 +3,6 @@ $ErrorActionPreference = 'Stop'
 # ---------- Settings ----------
 $SiteUrl           = 'https://gocleverpointcom.sharepoint.com/sites/SharePointServices'
 $ClientId          = 'e391b4e0-0151-4aa2-8ce7-dccf4b3921fa'
-$TrackerListUrl    = 'Lists/TeamsAttestationTracker'
-$TrackerUrlField   = 'SiteUrl'                  # column on the tracker list the lookup points to
 $RequestsListUrl   = 'Lists/AccessRequests'
 $RequestsListTitle = 'Site Access Requests'      # not 'Access Requests': SharePoint has a hidden built-in list with that title
 $ArchiveListUrl    = 'Lists/AccessRequestsArchive'
@@ -57,7 +55,11 @@ function Add-FieldIfMissing {
     $f = $null
     try { $f = Get-PnPField -List $List -Identity $InternalName -ErrorAction SilentlyContinue } catch { $f = $null }
     if ($null -ne $f) {
-        $want = ([xml]$Xml.Replace('#ID#', '{00000000-0000-0000-0000-000000000000}')).Field.DisplayName
+        $def = ([xml]$Xml.Replace('#ID#', '{00000000-0000-0000-0000-000000000000}')).Field
+        if ($f.TypeAsString -ne $def.Type) {
+            throw ("Column '{0}' on '{1}' is {2} but should be {3}. Delete the column (its data goes with it) and run again." -f $InternalName, $List.Title, $f.TypeAsString, $def.Type)
+        }
+        $want = $def.DisplayName
         if ($want -and $f.Title -ne $want) {
             Set-PnPField -List $List -Identity $InternalName -Values @{ Title = $want } | Out-Null
             Write-Host "  [name] $InternalName -> $want"
@@ -87,16 +89,25 @@ function Set-ViewSafe {
     }
 }
 
+function Set-FormOrder {
+    param($List, [string[]]$Order)
+    $ctx = Get-PnPContext
+    foreach ($ct in @(Get-PnPContentType -List $List)) {
+        if ($ct.Name -ne 'Item') { continue }
+        $ctx.Load($ct.FieldLinks)
+        $ctx.ExecuteQuery()
+        $present = @($ct.FieldLinks | ForEach-Object { $_.Name })
+        [string[]]$names = @($Order | Where-Object { $present -contains $_ })
+        $ct.FieldLinks.Reorder($names)
+        $ct.Update($false)
+        $ctx.ExecuteQuery()
+        Write-Host "  [upd ] form order"
+    }
+}
+
 Write-Host "Connecting to $SiteUrl ..." -ForegroundColor Cyan
 Connect-PnPOnline -Url $SiteUrl -Interactive -ClientId $ClientId
 
-$tracker = Get-ListSafe $TrackerListUrl
-if ($null -eq $tracker) { throw "Lookup source list '$TrackerListUrl' not found on $SiteUrl." }
-$trackerField = $null
-try { $trackerField = Get-PnPField -List $tracker -Identity $TrackerUrlField -ErrorAction SilentlyContinue } catch { $trackerField = $null }
-if ($null -eq $trackerField) { throw "Column '$TrackerUrlField' not found on '$($tracker.Title)'." }
-$trackerId = $tracker.Id.ToString()
-Write-Host "Lookup source: $($tracker.Title) / $TrackerUrlField"
 
 # ----- column definitions (Archive = also created on the archive list) -----
 $statusChoices = ''
@@ -107,7 +118,7 @@ $defs = [System.Collections.Generic.List[object]]::new()
 function Add-Def([string]$Name, [bool]$Archive, [string]$Xml) {
     $defs.Add([pscustomobject]@{ Name = $Name; Archive = $Archive; Xml = $Xml })
 }
-Add-Def 'SiteUrl'               $true  "<Field Type='Lookup' Name='SiteUrl' StaticName='SiteUrl' DisplayName='Site URL' ID='#ID#' List='{$trackerId}' ShowField='$TrackerUrlField' Required='TRUE' Indexed='TRUE' RelationshipDeleteBehavior='None' />"
+Add-Def 'SiteUrl'               $true  "<Field Type='Text' Name='SiteUrl' StaticName='SiteUrl' DisplayName='Site URL' Description='Paste the site URL as listed in the Teams Attestation Tracker.' ID='#ID#' Required='TRUE' Indexed='TRUE' MaxLength='255' />"
 Add-Def 'RequestStatus'         $true  "<Field Type='Choice' Name='RequestStatus' StaticName='RequestStatus' DisplayName='Current Status' ID='#ID#' Format='Dropdown' Required='TRUE' Indexed='TRUE'><Default>Pending Access Grant</Default><CHOICES>$statusChoices</CHOICES></Field>"
 Add-Def 'Requestor'             $true  "<Field Type='User' Name='Requestor' StaticName='Requestor' DisplayName='Requestor' ID='#ID#' UserSelectionMode='PeopleOnly' Required='TRUE' />"
 Add-Def 'BusinessJustification' $true  "<Field Type='Note' Name='BusinessJustification' StaticName='BusinessJustification' DisplayName='Business Justification' ID='#ID#' NumLines='4' RichText='FALSE' />"
@@ -132,6 +143,8 @@ Set-PnPField -List $req -Identity 'Title' -Values @{ Title = 'Request Title'; Re
 Write-Host 'Columns:' -ForegroundColor Cyan
 foreach ($d in $defs) { Add-FieldIfMissing $req $d.Name $d.Xml }
 Set-PnPField -List $req -Identity 'AccessStartDate' -Values @{ Required = $true; DefaultValue = '[today]'; Description = '' } | Out-Null
+$formOrder = @('Title','SiteUrl','RequestStatus','Requestor','BusinessJustification','AccessStartDate','AccessEndDate','AccessGrantedDate','AccessRevokedDate')
+Set-FormOrder -List $req -Order $formOrder
 
 Write-Host 'Views:' -ForegroundColor Cyan
 $main  = @('ID','SiteUrl','RequestStatus','Requestor','AccessStartDate','AccessGrantedDate','AccessEndDate','AccessRevokedDate','LastResult','Modified','Editor')
@@ -158,6 +171,7 @@ Add-FieldIfMissing $arc 'OriginalItemId' "<Field Type='Number' Name='OriginalIte
 Add-FieldIfMissing $arc 'SourceKey'      "<Field Type='Text' Name='SourceKey' StaticName='SourceKey' DisplayName='Source Key' ID='#ID#' MaxLength='100' Indexed='TRUE' />"
 Add-FieldIfMissing $arc 'ArchivedDate'   "<Field Type='DateTime' Name='ArchivedDate' StaticName='ArchivedDate' DisplayName='Archived Date' ID='#ID#' Format='DateTime' />"
 Add-FieldIfMissing $arc 'ArchivedBy'     "<Field Type='Text' Name='ArchivedBy' StaticName='ArchivedBy' DisplayName='Archived By (Server)' ID='#ID#' MaxLength='100' />"
+Set-FormOrder -List $arc -Order $formOrder
 
 Write-Host 'Views:' -ForegroundColor Cyan
 $arcFields = @('OriginalItemId','SiteUrl','RequestStatus','Requestor','AccessStartDate','AccessGrantedDate','AccessEndDate','AccessRevokedDate','Author','Created','Editor','Modified','ArchivedDate')

@@ -6,6 +6,9 @@ $AdminUrl          = 'https://gocleverpointcom-admin.sharepoint.com'
 $ClientId          = 'e391b4e0-0151-4aa2-8ce7-dccf4b3921fa'
 $RequestsListUrl   = 'Lists/AccessRequests'
 $ArchiveListUrl    = 'Lists/AccessRequestsArchive'
+$TrackerListUrl    = 'Lists/TeamsAttestationTracker'   # requests are only granted for sites listed here
+$TrackerUrlField   = 'SiteUrl'
+$TrackerRefreshMinutes = 10
 $GroupClaim        = 'c:0t.c|tenant|38f84872-fa14-440f-bed8-72b7e033445d'   # Entra ID group added as site collection admin
 $PollSeconds       = 30
 $LockMinutes       = 10      # how long one server owns an item while working on it
@@ -23,7 +26,7 @@ $inv = [Globalization.CultureInfo]::InvariantCulture
 $siteHost = ([Uri]$SiteUrl).Host
 $RunId = '{0}:{1}:{2}' -f $env:COMPUTERNAME, $PID, ([guid]::NewGuid().ToString('N').Substring(0, 6))
 $SnapFields = @('ID','SiteUrl','RequestStatus','AccessStartDate','AccessEndDate','AccessRevokedDate','AccessGrantedDate',
-                'GrantedPrincipal','NextAttempt','LockOwner','LockExpires')
+                'GrantedPrincipal','NextAttempt','LockOwner','LockExpires','Modified','LastProcessed')
 
 function Write-Line {
     param([string]$Text, [string]$Color = 'Gray')
@@ -58,9 +61,48 @@ function Get-LookupText($Value) {
     return [string]$Value
 }
 
-function Get-SiteKey([string]$Url) {
+# Reduces any URL inside a site (pages, lists, trailing slash) to the site collection URL.
+function Get-SiteRoot([string]$Url) {
     if (-not $Url) { return '' }
-    return $Url.Trim().TrimEnd('/').ToLowerInvariant()
+    $t = ($Url.Trim() -split '\s+')[0]
+    $u = $null
+    if (-not [Uri]::TryCreate($t, [UriKind]::Absolute, [ref]$u)) { return $t.TrimEnd('/') }
+    $path = [Uri]::UnescapeDataString($u.AbsolutePath)
+    $m = [regex]::Match($path, '^/(sites|teams|personal)/[^/]+', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $p = ''
+    if ($m.Success) { $p = $m.Value }
+    return ('{0}://{1}{2}' -f $u.Scheme, $u.Host, $p)
+}
+
+function Get-SiteKey([string]$Url) {
+    return (Get-SiteRoot $Url).ToLowerInvariant()
+}
+
+# Site URLs from the tracker (a multi-line text column, so it cannot be filtered server side):
+# read in pages and kept in memory, refreshed every $TrackerRefreshMinutes.
+function Update-TrackerCache([double]$MaxAgeMinutes) {
+    if ($null -ne $script:TrackerLoaded -and ((Get-Date) - $script:TrackerLoaded).TotalMinutes -lt $MaxAgeMinutes) { return }
+    $set = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $rows = @(Get-PnPListItem -List $script:TrackerList -PageSize 5000 -Fields $TrackerUrlField -Connection $script:Main)
+    foreach ($r in $rows) {
+        $raw = [string](Get-FieldValue $r.FieldValues $TrackerUrlField)
+        if (-not $raw) { continue }
+        $raw = [System.Net.WebUtility]::HtmlDecode([regex]::Replace($raw, '<[^>]+>', ' '))
+        foreach ($tok in ($raw -split '[\s;,]+')) {
+            if ($tok -match '^https?://') { [void]$set.Add((Get-SiteKey $tok)) }
+        }
+    }
+    $changed = ($null -eq $script:TrackerUrls -or $script:TrackerUrls.Count -ne $set.Count)
+    $script:TrackerUrls = $set
+    $script:TrackerLoaded = Get-Date
+    if ($changed) { Write-Line ('Tracker: {0} site URL(s) from {1} item(s).' -f $set.Count, $rows.Count) 'DarkGray' }
+}
+
+function Test-InTracker([string]$Url) {
+    $key = Get-SiteKey $Url
+    if ($null -ne $script:TrackerUrls -and $script:TrackerUrls.Contains($key)) { return $true }
+    Update-TrackerCache 1          # maybe added to the tracker since the last refresh
+    return $script:TrackerUrls.Contains($key)
 }
 
 function Get-HttpStatus($ErrorRecord) {
@@ -122,6 +164,9 @@ function Connect-Main {
     if ($null -eq $script:ArchList) { throw "List '$ArchiveListUrl' not found." }
     $script:ReqListId  = $script:ReqList.Id
     $script:ArchListId = $script:ArchList.Id
+    $script:TrackerList = Find-List $TrackerListUrl
+    if ($null -eq $script:TrackerList) { throw "List '$TrackerListUrl' not found." }
+    $script:TrackerLoaded = $null
     $skip = @('ContentType','Attachments','Created','Modified','Author','Editor','OriginalItemId','SourceKey','ArchivedDate','ArchivedBy')
     $types = @('Text','Note','Choice','MultiChoice','Number','Currency','DateTime','Boolean','User','UserMulti','Lookup','LookupMulti','URL')
     $script:CopyFields = @(Get-PnPField -List $script:ArchList -Connection $script:Main | Where-Object {
@@ -221,7 +266,7 @@ function New-ResultValues {
     $v = @{}
     $v['LastResult']    = Limit-Text $Message 255
     $v['ProcessingLog'] = Add-LogLine ([string](Get-FieldValue $Fv 'ProcessingLog')) $Message
-    $v['LastProcessed'] = Get-Date
+    $v['LastProcessed'] = [datetime]::Now   # not Get-Date: its PSObject wrapper is sent as text and saved as UTC
     $v['ProcessedBy']   = $env:COMPUTERNAME
     $v['AttemptCount']  = 0
     $v['NextAttempt']   = $null
@@ -254,7 +299,12 @@ function Set-SiteAdmin {
     [void]$tenant.SetSiteAdmin($Url.Trim().TrimEnd('/'), $Principal, $IsAdmin)
     try { $script:AdminConn.Context.ExecuteQuery() }
     catch {
-        if ((-not $IsAdmin) -and $_.Exception.Message -match 'not found|does not exist|cannot be found|could not be found') { return 'was not an admin' }
+        $m = $_.Exception.Message
+        if ($m -match 'File Not Found') {
+            if (-not $IsAdmin) { return 'site no longer exists' }
+            throw "Site '$Url' does not exist."
+        }
+        if ((-not $IsAdmin) -and $m -match 'not found|does not exist|cannot be found|could not be found') { return 'was not an admin' }
         throw
     }
     if ($IsAdmin) { return 'added' }
@@ -322,7 +372,7 @@ function Copy-ToArchive {
         }
         $new['OriginalItemId'] = [int]$Item.Id
         $new['SourceKey'] = $key
-        $new['ArchivedDate'] = Get-Date
+        $new['ArchivedDate'] = [datetime]::Now
         $new['ArchivedBy'] = $env:COMPUTERNAME
         $new['LastResult'] = 'Archived'
         $new['ProcessingLog'] = Add-LogLine ([string](Get-FieldValue $fv 'ProcessingLog')) 'Archived'
@@ -373,12 +423,14 @@ function Invoke-Request {
         $site = Get-LookupText (Get-FieldValue $fv 'SiteUrl')
 
         if ($action -eq 'Grant') {
+            $site = Get-SiteRoot $site
             Assert-SiteUrl $site
+            if (-not (Test-InTracker $site)) { throw "Site URL '$site' is not in the Teams Attestation Tracker. Fix the Site URL and save the item." }
             [void](Set-SiteAdmin -Url $site -Principal $GroupClaim -IsAdmin $true)
             $msg = "Added $GroupClaim as site collection admin on $site"
             $vals = New-ResultValues -Fv $fv -Message $msg
             $vals['RequestStatus']     = 'Access Granted'
-            $vals['AccessGrantedDate'] = Get-Date
+            $vals['AccessGrantedDate'] = [datetime]::Now
             $vals['GrantedPrincipal']  = $GroupClaim
             Save-Request -Id $id -Values $vals -EditorId $editorId -ModifiedUtc $modUtc
             Write-Line ('#{0} GRANTED  site admin -> {1}' -f $id, $site) 'Green'
@@ -386,6 +438,7 @@ function Invoke-Request {
         }
 
         if ($action -eq 'Revoke') {
+            $site = Get-SiteRoot $site
             $principal = [string](Get-FieldValue $fv 'GrantedPrincipal')
             $grantedAt = ConvertTo-Utc (Get-FieldValue $fv 'AccessGrantedDate')
             if (-not $principal -and $null -ne $grantedAt) { $principal = $GroupClaim }
@@ -403,7 +456,7 @@ function Invoke-Request {
             }
             $vals = New-ResultValues -Fv $fv -Message $msg -KeepLock
             $vals['RequestStatus']     = 'Access Revoked'
-            $vals['AccessRevokedDate'] = Get-Date
+            $vals['AccessRevokedDate'] = [datetime]::Now
             Save-Request -Id $id -Values $vals -EditorId $editorId -ModifiedUtc $modUtc
             Write-Line ('#{0} REVOKED  site admin -> {1}' -f $id, $site) 'Yellow'
             $action = 'Archive'
@@ -429,7 +482,7 @@ function Invoke-Request {
         $mins = [Math]::Min([Math]::Pow(2, $attempts), $MaxBackoffMinutes)
         $vals = New-ResultValues -Fv $fv -Message ('ERROR ({0}): {1}' -f $action, $err)
         $vals['AttemptCount'] = $attempts
-        $vals['NextAttempt']  = (Get-Date).AddMinutes($mins)
+        $vals['NextAttempt']  = [datetime]::Now.AddMinutes($mins)
         try { Save-Request -Id $id -Values $vals -EditorId $editorId -ModifiedUtc $modUtc }
         catch { Write-Line ('#{0} could not write the error back: {1}' -f $id, $_.Exception.Message) 'Red' }
         Write-Line ('#{0} FAILED {1} (try {2}, retry in {3} min): {4}' -f $id, $action, $attempts, $mins, $err) 'Red'
@@ -439,6 +492,8 @@ function Invoke-Request {
 
 function Invoke-Cycle {
     $now = [datetime]::UtcNow
+    try { Update-TrackerCache $TrackerRefreshMinutes }
+    catch { Write-Line ('Tracker refresh failed (using the previous copy): {0}' -f $_.Exception.Message) 'Red' }
     $items = @(Get-PnPListItem -List $script:ReqList -PageSize $PageSize -Fields $SnapFields -Connection $script:Main)
     $stat = @{ Open = $items.Count; Due = 0; Done = 0; Failed = 0; Busy = 0; Scheduled = 0; Waiting = 0 }
     $due = [System.Collections.Generic.List[object]]::new()
@@ -448,7 +503,12 @@ function Invoke-Cycle {
         if ($a -eq 'Scheduled') { $stat['Scheduled'] += 1; continue }
         if (-not $a) { continue }
         $next = ConvertTo-Utc (Get-FieldValue $fv 'NextAttempt')
-        if ($null -ne $next -and $next -gt $now) { $stat['Waiting'] += 1; continue }
+        if ($null -ne $next -and $next -gt $now) {
+            # a user edit after the last failed attempt (e.g. a corrected Site URL) retries right away
+            $mod = ConvertTo-Utc (Get-FieldValue $fv 'Modified')
+            $last = ConvertTo-Utc (Get-FieldValue $fv 'LastProcessed')
+            if (-not ($null -ne $mod -and $null -ne $last -and $mod -gt $last.AddSeconds(30))) { $stat['Waiting'] += 1; continue }
+        }
         $owner = [string](Get-FieldValue $fv 'LockOwner')
         $lockExp = ConvertTo-Utc (Get-FieldValue $fv 'LockExpires')
         if ($owner -and $owner -ne $RunId -and $null -ne $lockExp -and $lockExp -gt $now) { $stat['Busy'] += 1; continue }
