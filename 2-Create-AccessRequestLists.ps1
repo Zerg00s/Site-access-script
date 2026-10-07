@@ -6,9 +6,9 @@ $ClientId          = 'e391b4e0-0151-4aa2-8ce7-dccf4b3921fa'
 $TrackerListUrl    = 'Lists/TeamsAttestationTracker'
 $TrackerUrlField   = 'SiteUrl'                  # column on the tracker list the lookup points to
 $RequestsListUrl   = 'Lists/AccessRequests'
-$RequestsListTitle = 'Access Requests'
+$RequestsListTitle = 'Site Access Requests'      # not 'Access Requests': SharePoint has a hidden built-in list with that title
 $ArchiveListUrl    = 'Lists/AccessRequestsArchive'
-$ArchiveListTitle  = 'Access Requests Archive'
+$ArchiveListTitle  = 'Site Access Requests Archive'
 
 # ---------- Script ----------
 if (-not (Get-Module -ListAvailable -Name PnP.PowerShell)) {
@@ -19,16 +19,33 @@ if (-not (Get-Module -ListAvailable -Name PnP.PowerShell)) {
 function Get-ListSafe([string]$Identity) {
     $l = $null
     try { $l = Get-PnPList -Identity $Identity -ErrorAction SilentlyContinue } catch { $l = $null }
+    if ($null -eq $l -and $Identity.Contains('/')) {
+        # URL lookup is not reliable in every PnP version: compare each list's real URL instead
+        $want = '/' + $Identity.Trim('/').ToLowerInvariant()
+        foreach ($x in @(Get-PnPList)) {
+            $rel = Get-PnPProperty -ClientObject $x.RootFolder -Property ServerRelativeUrl
+            if ($rel.ToLowerInvariant().EndsWith($want)) { $l = $x; break }
+        }
+    }
     return $l
 }
 
 function Get-OrCreateList([string]$Url, [string]$Title) {
     $l = Get-ListSafe $Url
     if ($null -eq $l) {
+        $clash = Get-ListSafe $Title
+        if ($null -ne $clash) {
+            $clashUrl = Get-PnPProperty -ClientObject $clash.RootFolder -Property ServerRelativeUrl
+            throw ("A list titled '{0}' already exists at {1} ({2} items), not at '{3}'. Set the list URL variable to that list, or change the title variable." -f $Title, $clashUrl, $clash.ItemCount, $Url)
+        }
         New-PnPList -Title $Title -Url $Url -Template GenericList | Out-Null
         $l = Get-ListSafe $Url
         if ($null -eq $l) { throw "List '$Url' was not found after New-PnPList." }
         Write-Host "List created: $Title" -ForegroundColor Green
+    } elseif ($l.Title -ne $Title) {
+        $oldTitle = $l.Title
+        Set-PnPList -Identity $l -Title $Title | Out-Null
+        Write-Host "List renamed: $oldTitle -> $Title"
     } else {
         Write-Host "List exists: $($l.Title)"
     }

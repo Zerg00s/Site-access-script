@@ -98,12 +98,26 @@ function Assert-SiteUrl([string]$Url) {
 }
 
 # ----- connections and REST -----
+function Find-List([string]$Url) {
+    $l = $null
+    try { $l = Get-PnPList -Identity $Url -Connection $script:Main -ErrorAction SilentlyContinue } catch { $l = $null }
+    if ($null -eq $l) {
+        # URL lookup is not reliable in every PnP version: compare each list's real URL instead
+        $want = '/' + $Url.Trim('/').ToLowerInvariant()
+        foreach ($x in @(Get-PnPList -Connection $script:Main)) {
+            $rel = Get-PnPProperty -ClientObject $x.RootFolder -Property ServerRelativeUrl -Connection $script:Main
+            if ($rel.ToLowerInvariant().EndsWith($want)) { $l = $x; break }
+        }
+    }
+    return $l
+}
+
 function Connect-Main {
     $script:Main = Connect-PnPOnline -Url $SiteUrl -Interactive -ClientId $ClientId -ReturnConnection
     $script:AdminConn = Connect-PnPOnline -Url $AdminUrl -Interactive -ClientId $ClientId -ReturnConnection
     $script:Tenant = $null
-    $script:ReqList  = Get-PnPList -Identity $RequestsListUrl -Connection $script:Main
-    $script:ArchList = Get-PnPList -Identity $ArchiveListUrl -Connection $script:Main
+    $script:ReqList  = Find-List $RequestsListUrl
+    $script:ArchList = Find-List $ArchiveListUrl
     if ($null -eq $script:ReqList)  { throw "List '$RequestsListUrl' not found." }
     if ($null -eq $script:ArchList) { throw "List '$ArchiveListUrl' not found." }
     $script:ReqListId  = $script:ReqList.Id
