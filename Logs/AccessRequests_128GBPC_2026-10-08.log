@@ -1,0 +1,30 @@
+2026-10-08 09:31:34 Connected. 14 archive column(s) will be copied.
+2026-10-08 09:31:38 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-08 09:31:40 #3 ARCHIVED -> archive #19
+2026-10-08 09:31:41 #4 FAILED Grant: ERROR (Grant): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-08 09:31:42 #5 FAILED Grant: ERROR (Grant): Site 'https://gocleverpointcom.sharepoint.com/sites/TestSite00042' does not exist.
+2026-10-08 09:31:43 #7 ARCHIVED -> archive #20
+2026-10-08 09:31:44 #8 GRANTED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-08 09:31:44 5 open | 5 due | 3 done | 2 failed | 0 scheduled
+2026-10-08 09:35:44 Connected. 14 archive column(s) will be copied.
+2026-10-08 09:35:47 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-08 09:35:50 #8 REVOKED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-08 09:35:51 #8 ARCHIVED -> archive #21
+2026-10-08 09:35:51 3 open | 3 due | 1 done | 2 failed | 0 scheduled
+2026-10-08 09:39:11 Connected. 14 archive column(s) will be copied.
+2026-10-08 09:39:14 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-08 09:39:15 #4 FAILED Grant (try 5, retry in 32 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-08 09:39:16 #5 FAILED Grant (try 5, retry in 32 min): Site 'https://gocleverpointcom.sharepoint.com/sites/TestSite00042' does not exist.
+2026-10-08 09:39:17 #9 GRANTED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-08 09:39:18 #10 GRANTED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-08 09:39:18 4 open | 4 due | 2 done | 2 failed | 0 scheduled | 0 waiting retry
+2026-10-08 09:43:32 Connected. 14 archive column(s) will be copied.
+2026-10-08 09:43:36 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-08 09:43:39 #9 REVOKED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-08 09:43:41 #9 ARCHIVED -> archive #22
+2026-10-08 09:43:41 4 open | 1 due | 1 done | 0 failed | 0 scheduled | 2 waiting retry
+2026-10-08 09:48:49 Connected. 14 archive column(s) will be copied.
+2026-10-08 09:48:52 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-08 09:48:54 #10 REVOKED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-08 09:49:00 #10 ARCHIVED -> archive #23
+2026-10-08 09:49:00 3 open | 1 due | 1 done | 0 failed | 0 scheduled | 2 waiting retry

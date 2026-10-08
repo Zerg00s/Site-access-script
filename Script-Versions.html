@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Site Access Requests - What Each Version Does</title>
+</head>
+<body>
+<h1>Site Access Requests - What Each Version Does</h1>
+<p>Each version does everything the previous one did, plus the items listed under it.</p>
+
+<h2>Version A (Day 1)</h2>
+<ul>
+<li>Checks the Site Access Requests list every 30 seconds.</li>
+<li>Makes the security group a site collection admin of the requested site once the request's start date arrives.</li>
+<li>Takes that access away when the requester asks for removal, or when the removal date arrives.</li>
+<li>Updates the request with its new status and the date access was added or removed.</li>
+<li>Leaves "Modified" and "Modified By" showing the last person who edited the request.</li>
+<li>If something goes wrong, the reason appears in the request's "Last Result" column.</li>
+</ul>
+
+<h2>Version B (Day 2)</h2>
+<ul>
+<li>Only gives access to sites listed in the Teams Attestation Tracker.</li>
+<li>Accepts a site address copied from any page of the site, with or without a trailing slash, in any letter case.</li>
+<li>Gives clear messages, for example when a site is not in the tracker or no longer exists.</li>
+<li>Keeps a short history of everything done to each request.</li>
+<li>Once access is removed, moves the request to the Site Access Requests Archive list, keeping who created and last changed it, and when.</li>
+<li>Keeps a daily activity log on the server running it.</li>
+</ul>
+
+<h2>Version C (Day 3)</h2>
+<ul>
+<li>When a request fails, waits longer between each new attempt instead of retrying every 30 seconds.</li>
+<li>When someone fixes a failed request, tries again straight away.</li>
+<li>Keeps the security group's access to a site while another open request for that site still needs it.</li>
+<li>Double-checks the archived copy before removing the original request.</li>
+<li>Recovers by itself after a temporary connection problem.</li>
+</ul>
+
+<h2>Final Version</h2>
+<ul>
+<li>Can run on two or three servers at the same time for reliability, without two servers handling the same request.</li>
+<li>If one server stops partway through a request, another server picks it up after a few minutes.</li>
+</ul>
+</body>
+</html>

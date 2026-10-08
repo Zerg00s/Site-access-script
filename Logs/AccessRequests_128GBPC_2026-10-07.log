@@ -14,3 +14,14 @@
 2026-10-07 14:57:16 #4 FAILED Grant (try 3, retry in 8 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
 2026-10-07 14:57:17 #5 FAILED Grant (try 3, retry in 8 min): Site 'https://gocleverpointcom.sharepoint.com/sites/TestSite00042' does not exist.
 2026-10-07 14:57:17 3 open | 2 due | 0 done | 2 failed | 0 scheduled | 0 waiting retry | 0 on another server
+2026-10-07 15:20:06 Connected. 14 archive column(s) will be copied.
+2026-10-07 15:20:10 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-07 15:20:11 #4 FAILED Grant (try 4, retry in 16 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-07 15:20:12 #6 GRANTED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-07 15:20:13 #5 FAILED Grant (try 4, retry in 16 min): Site 'https://gocleverpointcom.sharepoint.com/sites/TestSite00042' does not exist.
+2026-10-07 15:20:13 4 open | 3 due | 1 done | 2 failed | 0 scheduled | 0 waiting retry | 0 on another server
+2026-10-07 15:21:33 Connected. 14 archive column(s) will be copied.
+2026-10-07 15:21:37 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-07 15:21:38 #6 REVOKED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-07 15:21:41 #6 ARCHIVED -> archive #18
+2026-10-07 15:21:41 4 open | 1 due | 1 done | 0 failed | 0 scheduled | 2 waiting retry | 0 on another server
