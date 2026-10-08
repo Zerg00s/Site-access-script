@@ -26,7 +26,7 @@ $inv = [Globalization.CultureInfo]::InvariantCulture
 $siteHost = ([Uri]$SiteUrl).Host
 $RunId = '{0}:{1}:{2}' -f $env:COMPUTERNAME, $PID, ([guid]::NewGuid().ToString('N').Substring(0, 6))
 $SnapFields = @('ID','SiteUrl','RequestStatus','AccessStartDate','AccessEndDate','AccessRevokedDate','AccessGrantedDate',
-                'GrantedPrincipal','NextAttempt','LockOwner','LockExpires','Modified','LastProcessed')
+                'GrantedPrincipal','NextAttempt','Editor','LockOwner','LockExpires','Modified')
 
 function Write-Line {
     param([string]$Text, [string]$Color = 'Gray')
@@ -114,14 +114,16 @@ function Get-HttpStatus($ErrorRecord) {
 function Get-RequestAction {
     param($Fv, [datetime]$NowUtc)
     $status = [string](Get-FieldValue $Fv 'RequestStatus')
+    $immediate = ($true -eq (Get-FieldValue $Fv 'RevokeAccessImmediately'))   # Yes = remove now, ignore the removal date
     if ($status -eq 'Pending Access Grant') {
+        if ($immediate) { return 'Revoke' }                                   # cancelled before it was granted
         $start = ConvertTo-Utc (Get-FieldValue $Fv 'AccessStartDate')
         if ($null -eq $start -or $start -le $NowUtc) { return 'Grant' }
         return 'Scheduled'
     }
     if ($status -eq 'Access Granted') {
         $end = ConvertTo-Utc (Get-FieldValue $Fv 'AccessEndDate')
-        if ($null -ne $end -and $end -le $NowUtc) { return 'Revoke' }
+        if ($immediate -or ($null -ne $end -and $end -le $NowUtc)) { return 'Revoke' }
         return ''
     }
     if ($status -eq 'Pending Access Removal') { return 'Revoke' }
@@ -167,6 +169,13 @@ function Connect-Main {
     $script:TrackerList = Find-List $TrackerListUrl
     if ($null -eq $script:TrackerList) { throw "List '$TrackerListUrl' not found." }
     $script:TrackerLoaded = $null
+    $me = Get-PnPProperty -ClientObject (Get-PnPWeb -Connection $script:Main) -Property CurrentUser -Connection $script:Main
+    $script:MyUserId = [int]$me.Id
+    $script:SnapFields = @($SnapFields)
+    $col = $null
+    try { $col = Get-PnPField -List $script:ReqList -Identity 'RevokeAccessImmediately' -Connection $script:Main -ErrorAction SilentlyContinue } catch { $col = $null }
+    if ($null -ne $col) { $script:SnapFields += 'RevokeAccessImmediately' }
+    else { Write-Line 'Column RevokeAccessImmediately not found on the requests list; removal dates only.' 'Yellow' }
     $skip = @('ContentType','Attachments','Created','Modified','Author','Editor','OriginalItemId','SourceKey','ArchivedDate','ArchivedBy')
     $types = @('Text','Note','Choice','MultiChoice','Number','Currency','DateTime','Boolean','User','UserMulti','Lookup','LookupMulti','URL')
     $script:CopyFields = @(Get-PnPField -List $script:ArchList -Connection $script:Main | Where-Object {
@@ -201,7 +210,7 @@ function Invoke-Spo {
 function Lock-Request([int]$Id) {
     $base = "$SiteUrl/_api/web/lists(guid'$($script:ReqListId)')/items($Id)"
     $r = $null
-    try { $r = Invoke-Spo -Method 'GET' -Url ($base + '?$select=LockOwner,LockExpires,Modified,EditorId') }
+    try { $r = Invoke-Spo -Method 'GET' -Url ($base + '?$select=LockOwner,LockExpires') }
     catch { if ((Get-HttpStatus $_) -eq 404) { return @{ State = 'Gone' } }; throw }
     $etag = $r.Headers['ETag']
     if ($etag -is [array]) { $etag = $etag[0] }
@@ -221,30 +230,15 @@ function Lock-Request([int]$Id) {
         if ($c -eq 404) { return @{ State = 'Gone' } }
         throw
     }
-    $editorId = 0
-    try { $editorId = [int]$j.EditorId } catch { $editorId = 0 }
-    $modUtc = ConvertTo-Utc $j.Modified
-    return @{ State = 'Locked'; EditorId = $editorId; ModifiedUtc = $modUtc }
+    return @{ State = 'Locked' }
 }
 
-# Writes values with UpdateOverwriteVersion and puts Modified / Modified By back to what they
-# were before the lock, so the item keeps the last human edit (the archive copies these).
-function Save-Request {
-    param([int]$Id, [hashtable]$Values, [int]$EditorId, $ModifiedUtc)
+# Normal update: adds a version, Modified By = the account running the script
+function Save-Request([int]$Id, [hashtable]$Values) {
     $ctx = $script:Main.Context
     $it = $ctx.Web.Lists.GetById($script:ReqListId).GetItemById($Id)
     foreach ($k in $Values.Keys) { $it[$k] = $Values[$k] }
-    $restore = ($EditorId -gt 0 -and $null -ne $ModifiedUtc)
-    if ($restore) {
-        $it['Editor'] = $EditorId
-        $it['Modified'] = $ModifiedUtc.ToLocalTime()
-    }
-    $it.UpdateOverwriteVersion()
-    try { $ctx.ExecuteQuery(); return }
-    catch { if (-not $restore) { throw } }
-    $it = $ctx.Web.Lists.GetById($script:ReqListId).GetItemById($Id)
-    foreach ($k in $Values.Keys) { $it[$k] = $Values[$k] }
-    $it.UpdateOverwriteVersion()
+    $it.Update()
     $ctx.ExecuteQuery()
 }
 
@@ -321,6 +315,7 @@ function Find-OtherActiveRequest {
         if ([string](Get-FieldValue $f 'RequestStatus') -ne 'Access Granted') { continue }
         $end = ConvertTo-Utc (Get-FieldValue $f 'AccessEndDate')
         if ($null -ne $end -and $end -le $NowUtc) { continue }
+        if ($true -eq (Get-FieldValue $f 'RevokeAccessImmediately')) { continue }
         if ((Get-SiteKey (Get-LookupText (Get-FieldValue $f 'SiteUrl'))) -ne $SiteKey) { continue }
         $p = [string](Get-FieldValue $f 'GrantedPrincipal')
         if (-not $p) { $p = $GroupClaim }
@@ -353,7 +348,7 @@ function Convert-FieldValue {
 # Copies the item to the archive (reusing a half-finished copy from an earlier attempt), stamps
 # Created / Created By / Modified / Modified By from the source, verifies them, returns the archive id.
 function Copy-ToArchive {
-    param($Item, [int]$EditorId, $ModifiedUtc)
+    param($Item)
     $ctx = $script:Main.Context
     $fv = $Item.FieldValues
     $key = '{0}:{1}' -f $script:ReqListId, $Item.Id
@@ -383,9 +378,9 @@ function Copy-ToArchive {
     }
 
     $authorId = [int](Get-FieldValue $fv 'Author').LookupId
-    if ($EditorId -le 0) { $EditorId = [int](Get-FieldValue $fv 'Editor').LookupId }
+    $EditorId = [int](Get-FieldValue $fv 'Editor').LookupId
     $createdUtc = ConvertTo-Utc (Get-FieldValue $fv 'Created')
-    if ($null -eq $ModifiedUtc) { $ModifiedUtc = ConvertTo-Utc (Get-FieldValue $fv 'Modified') }
+    $ModifiedUtc = ConvertTo-Utc (Get-FieldValue $fv 'Modified')
 
     $a = $alist.GetItemById($archId)
     $a['Author']   = $authorId          # bare int ids: see powershell-pnp skill
@@ -412,8 +407,6 @@ function Invoke-Request {
     $id = [int]$Snap.Id
     $lock = Lock-Request $id
     if ($lock.State -ne 'Locked') { return $lock.State }
-    $editorId = [int]$lock.EditorId
-    $modUtc = $lock.ModifiedUtc
     $fv = $null
     $action = ''
     try {
@@ -432,7 +425,7 @@ function Invoke-Request {
             $vals['RequestStatus']     = 'Access Granted'
             $vals['AccessGrantedDate'] = [datetime]::Now
             $vals['GrantedPrincipal']  = $GroupClaim
-            Save-Request -Id $id -Values $vals -EditorId $editorId -ModifiedUtc $modUtc
+            Save-Request -Id $id -Values $vals
             Write-Line ('#{0} GRANTED  site admin -> {1}' -f $id, $site) 'Green'
             return 'Done'
         }
@@ -457,21 +450,23 @@ function Invoke-Request {
             $vals = New-ResultValues -Fv $fv -Message $msg -KeepLock
             $vals['RequestStatus']     = 'Access Revoked'
             $vals['AccessRevokedDate'] = [datetime]::Now
-            Save-Request -Id $id -Values $vals -EditorId $editorId -ModifiedUtc $modUtc
-            Write-Line ('#{0} REVOKED  site admin -> {1}' -f $id, $site) 'Yellow'
+            Save-Request -Id $id -Values $vals
+            $label = 'REVOKED   site admin ->'
+            if (-not $principal) { $label = 'CANCELLED (never granted) ->' }
+            Write-Line ('#{0} {1} {2}' -f $id, $label, $site) 'Yellow'
             $action = 'Archive'
         }
 
         if ($action -eq 'Archive') {
             $final = Get-PnPListItem -List $script:ReqList -Id $id -Connection $script:Main
-            $archId = Copy-ToArchive -Item $final -EditorId $editorId -ModifiedUtc $modUtc
+            $archId = Copy-ToArchive -Item $final
             Remove-PnPListItem -List $script:ReqList -Identity $id -Recycle -Force -Connection $script:Main | Out-Null
             Write-Line ('#{0} ARCHIVED -> archive #{1}' -f $id, $archId) 'Yellow'
             return 'Done'
         }
 
         # Nothing to do any more (another server finished it, or a user changed it): release.
-        Save-Request -Id $id -Values @{ LockOwner = $null; LockExpires = $null } -EditorId $editorId -ModifiedUtc $modUtc
+        Save-Request -Id $id -Values @{ LockOwner = $null; LockExpires = $null }
         return 'Skipped'
     }
     catch {
@@ -483,7 +478,7 @@ function Invoke-Request {
         $vals = New-ResultValues -Fv $fv -Message ('ERROR ({0}): {1}' -f $action, $err)
         $vals['AttemptCount'] = $attempts
         $vals['NextAttempt']  = [datetime]::Now.AddMinutes($mins)
-        try { Save-Request -Id $id -Values $vals -EditorId $editorId -ModifiedUtc $modUtc }
+        try { Save-Request -Id $id -Values $vals }
         catch { Write-Line ('#{0} could not write the error back: {1}' -f $id, $_.Exception.Message) 'Red' }
         Write-Line ('#{0} FAILED {1} (try {2}, retry in {3} min): {4}' -f $id, $action, $attempts, $mins, $err) 'Red'
         return 'Failed'
@@ -494,7 +489,7 @@ function Invoke-Cycle {
     $now = [datetime]::UtcNow
     try { Update-TrackerCache $TrackerRefreshMinutes }
     catch { Write-Line ('Tracker refresh failed (using the previous copy): {0}' -f $_.Exception.Message) 'Red' }
-    $items = @(Get-PnPListItem -List $script:ReqList -PageSize $PageSize -Fields $SnapFields -Connection $script:Main)
+    $items = @(Get-PnPListItem -List $script:ReqList -PageSize $PageSize -Fields $script:SnapFields -Connection $script:Main)
     $stat = @{ Open = $items.Count; Due = 0; Done = 0; Failed = 0; Busy = 0; Scheduled = 0; Waiting = 0 }
     $due = [System.Collections.Generic.List[object]]::new()
     foreach ($it in $items) {
@@ -504,10 +499,11 @@ function Invoke-Cycle {
         if (-not $a) { continue }
         $next = ConvertTo-Utc (Get-FieldValue $fv 'NextAttempt')
         if ($null -ne $next -and $next -gt $now) {
-            # a user edit after the last failed attempt (e.g. a corrected Site URL) retries right away
-            $mod = ConvertTo-Utc (Get-FieldValue $fv 'Modified')
-            $last = ConvertTo-Utc (Get-FieldValue $fv 'LastProcessed')
-            if (-not ($null -ne $mod -and $null -ne $last -and $mod -gt $last.AddSeconds(30))) { $stat['Waiting'] += 1; continue }
+            # edited by someone other than this script's account since it failed (e.g. a corrected Site URL): retry now
+            $ed = Get-FieldValue $fv 'Editor'
+            $edId = 0
+            if ($null -ne $ed) { $edId = [int]$ed.LookupId }
+            if ($edId -eq $script:MyUserId) { $stat['Waiting'] += 1; continue }
         }
         $owner = [string](Get-FieldValue $fv 'LockOwner')
         $lockExp = ConvertTo-Utc (Get-FieldValue $fv 'LockExpires')

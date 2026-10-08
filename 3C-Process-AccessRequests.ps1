@@ -25,7 +25,7 @@ $LogDir = Join-Path $scriptRoot 'Logs'
 $inv = [Globalization.CultureInfo]::InvariantCulture
 $siteHost = ([Uri]$SiteUrl).Host
 $SnapFields = @('ID','SiteUrl','RequestStatus','AccessStartDate','AccessEndDate','AccessRevokedDate','AccessGrantedDate',
-                'GrantedPrincipal','NextAttempt','Modified','LastProcessed')
+                'GrantedPrincipal','NextAttempt','Editor','Modified')
 
 function Write-Line {
     param([string]$Text, [string]$Color = 'Gray')
@@ -107,14 +107,16 @@ function Test-InTracker([string]$Url) {
 function Get-RequestAction {
     param($Fv, [datetime]$NowUtc)
     $status = [string](Get-FieldValue $Fv 'RequestStatus')
+    $immediate = ($true -eq (Get-FieldValue $Fv 'RevokeAccessImmediately'))   # Yes = remove now, ignore the removal date
     if ($status -eq 'Pending Access Grant') {
+        if ($immediate) { return 'Revoke' }                                   # cancelled before it was granted
         $start = ConvertTo-Utc (Get-FieldValue $Fv 'AccessStartDate')
         if ($null -eq $start -or $start -le $NowUtc) { return 'Grant' }
         return 'Scheduled'
     }
     if ($status -eq 'Access Granted') {
         $end = ConvertTo-Utc (Get-FieldValue $Fv 'AccessEndDate')
-        if ($null -ne $end -and $end -le $NowUtc) { return 'Revoke' }
+        if ($immediate -or ($null -ne $end -and $end -le $NowUtc)) { return 'Revoke' }
         return ''
     }
     if ($status -eq 'Pending Access Removal') { return 'Revoke' }
@@ -160,6 +162,13 @@ function Connect-Main {
     $script:TrackerList = Find-List $TrackerListUrl
     if ($null -eq $script:TrackerList) { throw "List '$TrackerListUrl' not found." }
     $script:TrackerLoaded = $null
+    $me = Get-PnPProperty -ClientObject (Get-PnPWeb -Connection $script:Main) -Property CurrentUser -Connection $script:Main
+    $script:MyUserId = [int]$me.Id
+    $script:SnapFields = @($SnapFields)
+    $col = $null
+    try { $col = Get-PnPField -List $script:ReqList -Identity 'RevokeAccessImmediately' -Connection $script:Main -ErrorAction SilentlyContinue } catch { $col = $null }
+    if ($null -ne $col) { $script:SnapFields += 'RevokeAccessImmediately' }
+    else { Write-Line 'Column RevokeAccessImmediately not found on the requests list; removal dates only.' 'Yellow' }
     $skip = @('ContentType','Attachments','Created','Modified','Author','Editor','OriginalItemId','SourceKey','ArchivedDate','ArchivedBy')
     $types = @('Text','Note','Choice','MultiChoice','Number','Currency','DateTime','Boolean','User','UserMulti','Lookup','LookupMulti','URL')
     $script:CopyFields = @(Get-PnPField -List $script:ArchList -Connection $script:Main | Where-Object {
@@ -168,12 +177,12 @@ function Connect-Main {
     })
 }
 
-# SystemUpdate: Modified / Modified By keep showing the user's last edit
+# Normal update: adds a version, Modified By = the account running the script
 function Save-Request([int]$Id, [hashtable]$Values) {
     $ctx = $script:Main.Context
     $it = $ctx.Web.Lists.GetById($script:ReqListId).GetItemById($Id)
     foreach ($k in $Values.Keys) { $it[$k] = $Values[$k] }
-    $it.SystemUpdate()
+    $it.Update()
     $ctx.ExecuteQuery()
 }
 
@@ -249,6 +258,7 @@ function Find-OtherActiveRequest {
         if ([string](Get-FieldValue $f 'RequestStatus') -ne 'Access Granted') { continue }
         $end = ConvertTo-Utc (Get-FieldValue $f 'AccessEndDate')
         if ($null -ne $end -and $end -le $NowUtc) { continue }
+        if ($true -eq (Get-FieldValue $f 'RevokeAccessImmediately')) { continue }
         if ((Get-SiteKey (Get-LookupText (Get-FieldValue $f 'SiteUrl'))) -ne $SiteKey) { continue }
         $p = [string](Get-FieldValue $f 'GrantedPrincipal')
         if (-not $p) { $p = $GroupClaim }
@@ -382,7 +392,9 @@ function Invoke-Request {
             $vals['RequestStatus']     = 'Access Revoked'
             $vals['AccessRevokedDate'] = [datetime]::Now
             Save-Request -Id $id -Values $vals
-            Write-Line ('#{0} REVOKED  site admin -> {1}' -f $id, $site) 'Yellow'
+            $label = 'REVOKED   site admin ->'
+            if (-not $principal) { $label = 'CANCELLED (never granted) ->' }
+            Write-Line ('#{0} {1} {2}' -f $id, $label, $site) 'Yellow'
             $action = 'Archive'
         }
 
@@ -416,7 +428,7 @@ function Invoke-Cycle {
     $now = [datetime]::UtcNow
     try { Update-TrackerCache $TrackerRefreshMinutes }
     catch { Write-Line ('Tracker refresh failed (using the previous copy): {0}' -f $_.Exception.Message) 'Red' }
-    $items = @(Get-PnPListItem -List $script:ReqList -PageSize $PageSize -Fields $SnapFields -Connection $script:Main)
+    $items = @(Get-PnPListItem -List $script:ReqList -PageSize $PageSize -Fields $script:SnapFields -Connection $script:Main)
     $stat = @{ Open = $items.Count; Due = 0; Done = 0; Failed = 0; Scheduled = 0; Waiting = 0 }
     $due = [System.Collections.Generic.List[object]]::new()
     foreach ($it in $items) {
@@ -426,10 +438,11 @@ function Invoke-Cycle {
         if (-not $a) { continue }
         $next = ConvertTo-Utc (Get-FieldValue $fv 'NextAttempt')
         if ($null -ne $next -and $next -gt $now) {
-            # a user edit after the last failed attempt (e.g. a corrected Site URL) retries right away
-            $mod = ConvertTo-Utc (Get-FieldValue $fv 'Modified')
-            $last = ConvertTo-Utc (Get-FieldValue $fv 'LastProcessed')
-            if (-not ($null -ne $mod -and $null -ne $last -and $mod -gt $last.AddSeconds(30))) { $stat['Waiting'] += 1; continue }
+            # edited by someone other than this script's account since it failed (e.g. a corrected Site URL): retry now
+            $ed = Get-FieldValue $fv 'Editor'
+            $edId = 0
+            if ($null -ne $ed) { $edId = [int]$ed.LookupId }
+            if ($edId -eq $script:MyUserId) { $stat['Waiting'] += 1; continue }
         }
         $due.Add($it)
     }

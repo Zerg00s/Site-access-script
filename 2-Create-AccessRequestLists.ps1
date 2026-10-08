@@ -124,6 +124,7 @@ Add-Def 'Requestor'             $true  "<Field Type='User' Name='Requestor' Stat
 Add-Def 'BusinessJustification' $true  "<Field Type='Note' Name='BusinessJustification' StaticName='BusinessJustification' DisplayName='Business Justification' ID='#ID#' NumLines='4' RichText='FALSE' />"
 Add-Def 'AccessStartDate'       $true  "<Field Type='DateTime' Name='AccessStartDate' StaticName='AccessStartDate' DisplayName='Date Access To Be Added' ID='#ID#' Format='DateTime' Required='TRUE'><Default>[today]</Default></Field>"
 Add-Def 'AccessEndDate'         $true  "<Field Type='DateTime' Name='AccessEndDate' StaticName='AccessEndDate' DisplayName='Date Access To Be Removed' Description='Leave blank to keep access. Set it (or set status to Pending Access Removal) to remove access.' ID='#ID#' Format='DateTime' />"
+Add-Def 'RevokeAccessImmediately' $false "<Field Type='Boolean' Name='RevokeAccessImmediately' StaticName='RevokeAccessImmediately' DisplayName='Revoke Access Immediately' Description='Yes = remove access now, ignoring the removal date.' ID='#ID#'><Default>0</Default></Field>"
 Add-Def 'AccessGrantedDate'     $true  "<Field Type='DateTime' Name='AccessGrantedDate' StaticName='AccessGrantedDate' DisplayName='Access Added On (by Script)' ID='#ID#' Format='DateTime' $noForms />"
 Add-Def 'AccessRevokedDate'     $true  "<Field Type='DateTime' Name='AccessRevokedDate' StaticName='AccessRevokedDate' DisplayName='Access Removed On (by Script)' ID='#ID#' Format='DateTime' $noForms />"
 Add-Def 'GrantedPrincipal'      $true  "<Field Type='Text' Name='GrantedPrincipal' StaticName='GrantedPrincipal' DisplayName='Site Admin Group Added' ID='#ID#' MaxLength='255' $noForms />"
@@ -143,16 +144,16 @@ Set-PnPField -List $req -Identity 'Title' -Values @{ Title = 'Request Title'; Re
 Write-Host 'Columns:' -ForegroundColor Cyan
 foreach ($d in $defs) { Add-FieldIfMissing $req $d.Name $d.Xml }
 Set-PnPField -List $req -Identity 'AccessStartDate' -Values @{ Required = $true; DefaultValue = '[today]'; Description = '' } | Out-Null
-$formOrder = @('Title','SiteUrl','RequestStatus','Requestor','BusinessJustification','AccessStartDate','AccessEndDate','AccessGrantedDate','AccessRevokedDate')
+$formOrder = @('Title','SiteUrl','RequestStatus','Requestor','BusinessJustification','AccessStartDate','AccessEndDate','RevokeAccessImmediately','AccessGrantedDate','AccessRevokedDate')
 Set-FormOrder -List $req -Order $formOrder
 
 Write-Host 'Views:' -ForegroundColor Cyan
-$main  = @('ID','SiteUrl','RequestStatus','Requestor','AccessStartDate','AccessGrantedDate','AccessEndDate','AccessRevokedDate','LastResult','Modified','Editor')
+$main  = @('ID','SiteUrl','RequestStatus','Requestor','AccessStartDate','AccessGrantedDate','AccessEndDate','RevokeAccessImmediately','AccessRevokedDate','LastResult','Modified','Editor')
 $admin = @('ID','SiteUrl','RequestStatus','LastResult','LastProcessed','ProcessedBy','AttemptCount','NextAttempt','LockOwner','LockExpires','GrantedPrincipal')
 Set-ViewSafe -List $req -Title 'All Items'            -Fields $main -Query "<OrderBy><FieldRef Name='ID' Ascending='FALSE' /></OrderBy>"
 Set-ViewSafe -List $req -Title 'Pending Grant'        -Fields $main -Query "<Where><Eq><FieldRef Name='RequestStatus' /><Value Type='Choice'>Pending Access Grant</Value></Eq></Where><OrderBy><FieldRef Name='AccessStartDate' /></OrderBy>"
 Set-ViewSafe -List $req -Title 'Active Access'        -Fields $main -Query "<Where><Eq><FieldRef Name='RequestStatus' /><Value Type='Choice'>Access Granted</Value></Eq></Where><OrderBy><FieldRef Name='AccessEndDate' /></OrderBy>"
-Set-ViewSafe -List $req -Title 'Removal Due'          -Fields $main -Query "<Where><Or><And><Eq><FieldRef Name='RequestStatus' /><Value Type='Choice'>Access Granted</Value></Eq><Leq><FieldRef Name='AccessEndDate' /><Value Type='DateTime'><Today /></Value></Leq></And><Eq><FieldRef Name='RequestStatus' /><Value Type='Choice'>Pending Access Removal</Value></Eq></Or></Where>"
+Set-ViewSafe -List $req -Title 'Removal Due'          -Fields $main -Query "<Where><Or><And><Eq><FieldRef Name='RequestStatus' /><Value Type='Choice'>Access Granted</Value></Eq><Leq><FieldRef Name='AccessEndDate' /><Value Type='DateTime'><Today /></Value></Leq></And><Or><Eq><FieldRef Name='RequestStatus' /><Value Type='Choice'>Pending Access Removal</Value></Eq><Eq><FieldRef Name='RevokeAccessImmediately' /><Value Type='Boolean'>1</Value></Eq></Or></Or></Where>"
 Set-ViewSafe -List $req -Title 'My Requests'          -Fields $main -Query "<Where><Or><Eq><FieldRef Name='Requestor' /><Value Type='Integer'><UserID /></Value></Eq><Eq><FieldRef Name='Author' /><Value Type='Integer'><UserID /></Value></Eq></Or></Where><OrderBy><FieldRef Name='ID' Ascending='FALSE' /></OrderBy>"
 Set-ViewSafe -List $req -Title 'Needs Attention'      -Fields $admin -Query "<Where><Gt><FieldRef Name='AttemptCount' /><Value Type='Number'>0</Value></Gt></Where>"
 Set-ViewSafe -List $req -Title 'Processing Details'   -Fields $admin -Query "<OrderBy><FieldRef Name='LastProcessed' Ascending='FALSE' /></OrderBy>"
