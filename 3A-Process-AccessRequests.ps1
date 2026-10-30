@@ -42,19 +42,46 @@ function Find-List([string]$Url) {
     return $l
 }
 
+# Admin-site context built from the main sign-in, so the script asks to sign in only once.
+# Falls back to a second sign-in if this PnP version does not support it.
+function New-AdminContext {
+    try {
+        $fw = $null
+        foreach ($x in [AppDomain]::CurrentDomain.GetAssemblies()) {
+            if (-not $x.IsDynamic -and $x.GetName().Name -eq 'PnP.Framework') { $fw = $x; break }
+        }
+        $m = $null
+        foreach ($c in $fw.GetType('Microsoft.SharePoint.Client.ClientContextExtensions').GetMethods()) {
+            if ($c.Name -eq 'Clone' -and $c.GetParameters()[1].ParameterType -eq [string]) { $m = $c; break }
+        }
+        $argList = @($script:Main.Context.PSObject.BaseObject, $AdminUrl)
+        for ($i = 2; $i -lt $m.GetParameters().Count; $i++) { $argList += $null }
+        return $m.Invoke($null, $argList)
+    }
+    catch {
+        $conn = Connect-PnPOnline -Url $AdminUrl -Interactive -ClientId $ClientId -ReturnConnection
+        return $conn.Context
+    }
+}
+
 # Tenant object built from the CSOM assembly PnP loaded (another CSOM copy on the machine does not bind)
 function Get-Tenant {
+    if ($null -ne $script:TenantBuilt -and ((Get-Date) - $script:TenantBuilt).TotalMinutes -ge 30) {
+        $script:AdminCtx = New-AdminContext      # rebuilt from the main sign-in, which renews itself
+        $script:Tenant = $null
+    }
     if ($null -eq $script:Tenant) {
-        $ctx = $script:AdminConn.Context
+        $ctx = $script:AdminCtx
         $dir = Split-Path -Parent $ctx.GetType().Assembly.Location
         $asm = $null
         foreach ($x in [AppDomain]::CurrentDomain.GetAssemblies()) {
             if ($x.IsDynamic -or $x.GetName().Name -ne 'Microsoft.Online.SharePoint.Client.Tenant') { continue }
             if ((Split-Path -Parent $x.Location) -eq $dir) { $asm = $x; break }
         }
-        if ($null -eq $asm) { throw "Tenant CSOM assembly not found next to $dir." }
+        if ($null -eq $asm) { $asm = [Reflection.Assembly]::LoadFrom((Join-Path $dir 'Microsoft.Online.SharePoint.Client.Tenant.dll')) }
         $type = $asm.GetType('Microsoft.Online.SharePoint.TenantAdministration.Tenant')
         $script:Tenant = $type.GetConstructors()[0].Invoke(@($ctx.PSObject.BaseObject))
+        $script:TenantBuilt = Get-Date
     }
     return $script:Tenant
 }
@@ -62,7 +89,7 @@ function Get-Tenant {
 function Set-SiteAdmin([string]$Url, [bool]$IsAdmin) {
     $tenant = Get-Tenant
     [void]$tenant.SetSiteAdmin($Url, $GroupClaim, $IsAdmin)
-    $script:AdminConn.Context.ExecuteQuery()
+    $script:AdminCtx.ExecuteQuery()
 }
 
 # SystemUpdate: Modified / Modified By keep showing the user's last edit
@@ -81,7 +108,7 @@ Write-Host ("  Site: {0}   Every: {1}s   Ctrl+C to stop" -f $SiteUrl, $PollSecon
 Write-Host ''
 
 $script:Main      = Connect-PnPOnline -Url $SiteUrl -Interactive -ClientId $ClientId -ReturnConnection
-$script:AdminConn = Connect-PnPOnline -Url $AdminUrl -Interactive -ClientId $ClientId -ReturnConnection
+$script:AdminCtx  = New-AdminContext
 $script:Tenant    = $null
 $script:ReqList   = Find-List $RequestsListUrl
 Write-Line 'Connected.' 'Cyan'

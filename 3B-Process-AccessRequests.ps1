@@ -31,7 +31,7 @@ function Write-Line {
     param([string]$Text, [string]$Color = 'Gray')
     Write-Host ('[{0}] {1}' -f (Get-Date).ToString('HH:mm:ss'), $Text) -ForegroundColor $Color
     try {
-        $file = Join-Path $LogDir ('AccessRequests_{0}_{1}.log' -f $env:COMPUTERNAME, (Get-Date).ToString('yyyy-MM-dd'))
+        $file = Join-Path $LogDir ('AccessRequests_{0}_{1}_{2}.log' -f $env:COMPUTERNAME, $env:USERNAME, (Get-Date).ToString('yyyy-MM-dd'))
         Add-Content -LiteralPath $file -Value ('{0} {1}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Text)
     } catch {}
 }
@@ -146,9 +146,31 @@ function Find-List([string]$Url) {
     return $l
 }
 
+# Admin-site context built from the main sign-in, so the script asks to sign in only once.
+# Falls back to a second sign-in if this PnP version does not support it.
+function New-AdminContext {
+    try {
+        $fw = $null
+        foreach ($x in [AppDomain]::CurrentDomain.GetAssemblies()) {
+            if (-not $x.IsDynamic -and $x.GetName().Name -eq 'PnP.Framework') { $fw = $x; break }
+        }
+        $m = $null
+        foreach ($c in $fw.GetType('Microsoft.SharePoint.Client.ClientContextExtensions').GetMethods()) {
+            if ($c.Name -eq 'Clone' -and $c.GetParameters()[1].ParameterType -eq [string]) { $m = $c; break }
+        }
+        $argList = @($script:Main.Context.PSObject.BaseObject, $AdminUrl)
+        for ($i = 2; $i -lt $m.GetParameters().Count; $i++) { $argList += $null }
+        return $m.Invoke($null, $argList)
+    }
+    catch {
+        $conn = Connect-PnPOnline -Url $AdminUrl -Interactive -ClientId $ClientId -ReturnConnection
+        return $conn.Context
+    }
+}
+
 function Connect-Main {
     $script:Main = Connect-PnPOnline -Url $SiteUrl -Interactive -ClientId $ClientId -ReturnConnection
-    $script:AdminConn = Connect-PnPOnline -Url $AdminUrl -Interactive -ClientId $ClientId -ReturnConnection
+    $script:AdminCtx = New-AdminContext
     $script:Tenant = $null
     $script:ReqList  = Find-List $RequestsListUrl
     $script:ArchList = Find-List $ArchiveListUrl
@@ -206,8 +228,12 @@ function New-ResultValues {
 
 # ----- site collection admin (via the tenant admin site, so the script account need not own the site) -----
 function Get-Tenant {
+    if ($null -ne $script:TenantBuilt -and ((Get-Date) - $script:TenantBuilt).TotalMinutes -ge 30) {
+        $script:AdminCtx = New-AdminContext      # rebuilt from the main sign-in, which renews itself
+        $script:Tenant = $null
+    }
     if ($null -eq $script:Tenant) {
-        $ctx = $script:AdminConn.Context
+        $ctx = $script:AdminCtx
         $dir = Split-Path -Parent $ctx.GetType().Assembly.Location
         # Build the Tenant object from the assembly PnP itself loaded; a type from another
         # CSOM copy on the machine does not bind to PnP's context.
@@ -216,9 +242,10 @@ function Get-Tenant {
             if ($x.IsDynamic -or $x.GetName().Name -ne 'Microsoft.Online.SharePoint.Client.Tenant') { continue }
             if ((Split-Path -Parent $x.Location) -eq $dir) { $asm = $x; break }
         }
-        if ($null -eq $asm) { throw "Tenant CSOM assembly not found next to $dir." }
+        if ($null -eq $asm) { $asm = [Reflection.Assembly]::LoadFrom((Join-Path $dir 'Microsoft.Online.SharePoint.Client.Tenant.dll')) }
         $type = $asm.GetType('Microsoft.Online.SharePoint.TenantAdministration.Tenant')
         $script:Tenant = $type.GetConstructors()[0].Invoke(@($ctx.PSObject.BaseObject))
+        $script:TenantBuilt = Get-Date
     }
     return $script:Tenant
 }
@@ -227,7 +254,7 @@ function Set-SiteAdmin {
     param([string]$Url, [string]$Principal, [bool]$IsAdmin)
     $tenant = Get-Tenant
     [void]$tenant.SetSiteAdmin($Url.Trim().TrimEnd('/'), $Principal, $IsAdmin)
-    try { $script:AdminConn.Context.ExecuteQuery() }
+    try { $script:AdminCtx.ExecuteQuery() }
     catch {
         $m = $_.Exception.Message
         if ($m -match 'File Not Found') {

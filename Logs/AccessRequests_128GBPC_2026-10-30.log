@@ -1,0 +1,5 @@
+2026-10-30 13:47:19 Connected. 14 archive column(s) will be copied.
+2026-10-30 13:47:23 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 13:47:24 #4 FAILED Grant (try 8, retry in 60 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-30 13:47:25 #5 FAILED Grant (try 8, retry in 60 min): Site 'https://gocleverpointcom.sharepoint.com/sites/TestSite00042' does not exist.
+2026-10-30 13:47:25 2 open | 2 due | 0 done | 2 failed | 0 scheduled | 0 waiting retry | 0 on another server

@@ -1,0 +1,35 @@
+2026-10-30 13:56:19 Connected. 14 archive column(s) will be copied.
+2026-10-30 13:56:21 Connected. 14 archive column(s) will be copied.
+2026-10-30 13:56:22 Connected. 14 archive column(s) will be copied.
+2026-10-30 13:56:23 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 13:56:25 #4 FAILED Grant (try 9, retry in 60 min): Site URL 'https://gocleverpointcom.sharepoint.com/sites/NotInTracker' is not in the Teams Attestation Tracker. Fix the Site URL and save the item.
+2026-10-30 13:56:25 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 13:56:26 idle: 3 open | 0 due | 0 done | 0 failed | 0 scheduled | 2 waiting retry | 1 on another server
+2026-10-30 13:56:26 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 13:56:26 #16 GRANTED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-30 13:56:26 3 open | 2 due | 1 done | 1 failed | 0 scheduled | 1 waiting retry | 0 on another server
+2026-10-30 13:56:26 idle: 3 open | 0 due | 0 done | 0 failed | 0 scheduled | 2 waiting retry | 0 on another server
+2026-10-30 13:59:39 Connected. 14 archive column(s) will be copied.
+2026-10-30 14:00:23 Connected. 14 archive column(s) will be copied.
+2026-10-30 14:00:25 Connected. 14 archive column(s) will be copied.
+2026-10-30 14:00:27 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 14:00:27 Connected. 14 archive column(s) will be copied.
+2026-10-30 14:00:29 #17 GRANTED  site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-30 14:00:29 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 14:00:29 idle: 4 open | 0 due | 0 done | 0 failed | 0 scheduled | 2 waiting retry | 1 on another server
+2026-10-30 14:00:30 #16 REVOKED   site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-30 14:00:31 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 14:00:31 idle: 4 open | 0 due | 0 done | 0 failed | 0 scheduled | 2 waiting retry | 1 on another server
+2026-10-30 14:00:32 #16 ARCHIVED -> archive #29
+2026-10-30 14:00:32 4 open | 2 due | 2 done | 0 failed | 0 scheduled | 2 waiting retry | 0 on another server
+2026-10-30 14:05:15 Connected. 14 archive column(s) will be copied.
+2026-10-30 14:05:16 Connected. 14 archive column(s) will be copied.
+2026-10-30 14:05:18 Connected. 14 archive column(s) will be copied.
+2026-10-30 14:05:19 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 14:05:20 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 14:05:20 idle: 3 open | 0 due | 0 done | 0 failed | 0 scheduled | 2 waiting retry | 1 on another server
+2026-10-30 14:05:21 Tracker: 13001 site URL(s) from 13001 item(s).
+2026-10-30 14:05:21 #17 REVOKED   site admin -> https://gocleverpointcom.sharepoint.com/sites/SharePointServices
+2026-10-30 14:05:21 idle: 3 open | 0 due | 0 done | 0 failed | 0 scheduled | 2 waiting retry | 1 on another server
+2026-10-30 14:05:23 #17 ARCHIVED -> archive #30
+2026-10-30 14:05:23 3 open | 1 due | 1 done | 0 failed | 0 scheduled | 2 waiting retry | 0 on another server

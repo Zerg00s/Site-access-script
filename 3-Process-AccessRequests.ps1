@@ -26,13 +26,13 @@ $inv = [Globalization.CultureInfo]::InvariantCulture
 $siteHost = ([Uri]$SiteUrl).Host
 $RunId = '{0}:{1}:{2}' -f $env:COMPUTERNAME, $PID, ([guid]::NewGuid().ToString('N').Substring(0, 6))
 $SnapFields = @('ID','SiteUrl','RequestStatus','AccessStartDate','AccessEndDate','AccessRevokedDate','AccessGrantedDate',
-                'GrantedPrincipal','NextAttempt','Editor','LockOwner','LockExpires','Modified')
+                'GrantedPrincipal','NextAttempt','LockOwner','LockExpires','Modified','LastProcessed')
 
 function Write-Line {
     param([string]$Text, [string]$Color = 'Gray')
     Write-Host ('[{0}] {1}' -f (Get-Date).ToString('HH:mm:ss'), $Text) -ForegroundColor $Color
     try {
-        $file = Join-Path $LogDir ('AccessRequests_{0}_{1}.log' -f $env:COMPUTERNAME, (Get-Date).ToString('yyyy-MM-dd'))
+        $file = Join-Path $LogDir ('AccessRequests_{0}_{1}_{2}.log' -f $env:COMPUTERNAME, $env:USERNAME, (Get-Date).ToString('yyyy-MM-dd'))
         Add-Content -LiteralPath $file -Value ('{0} {1}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Text)
     } catch {}
 }
@@ -111,6 +111,14 @@ function Get-HttpStatus($ErrorRecord) {
     return $code
 }
 
+# True while a failed request should wait. A change well after the last attempt (e.g. a corrected
+# Site URL) ends the wait. The margin covers clock differences; the account cannot be used because
+# several admins may run this script.
+function Test-RetryWaiting($NextUtc, $ModifiedUtc, $LastUtc, [datetime]$NowUtc) {
+    if ($null -eq $NextUtc -or $NextUtc -le $NowUtc) { return $false }
+    return (-not ($null -ne $ModifiedUtc -and $null -ne $LastUtc -and $ModifiedUtc -gt $LastUtc.AddMinutes(3)))
+}
+
 function Get-RequestAction {
     param($Fv, [datetime]$NowUtc)
     $status = [string](Get-FieldValue $Fv 'RequestStatus')
@@ -156,9 +164,31 @@ function Find-List([string]$Url) {
     return $l
 }
 
+# Admin-site context built from the main sign-in, so the script asks to sign in only once.
+# Falls back to a second sign-in if this PnP version does not support it.
+function New-AdminContext {
+    try {
+        $fw = $null
+        foreach ($x in [AppDomain]::CurrentDomain.GetAssemblies()) {
+            if (-not $x.IsDynamic -and $x.GetName().Name -eq 'PnP.Framework') { $fw = $x; break }
+        }
+        $m = $null
+        foreach ($c in $fw.GetType('Microsoft.SharePoint.Client.ClientContextExtensions').GetMethods()) {
+            if ($c.Name -eq 'Clone' -and $c.GetParameters()[1].ParameterType -eq [string]) { $m = $c; break }
+        }
+        $argList = @($script:Main.Context.PSObject.BaseObject, $AdminUrl)
+        for ($i = 2; $i -lt $m.GetParameters().Count; $i++) { $argList += $null }
+        return $m.Invoke($null, $argList)
+    }
+    catch {
+        $conn = Connect-PnPOnline -Url $AdminUrl -Interactive -ClientId $ClientId -ReturnConnection
+        return $conn.Context
+    }
+}
+
 function Connect-Main {
     $script:Main = Connect-PnPOnline -Url $SiteUrl -Interactive -ClientId $ClientId -ReturnConnection
-    $script:AdminConn = Connect-PnPOnline -Url $AdminUrl -Interactive -ClientId $ClientId -ReturnConnection
+    $script:AdminCtx = New-AdminContext
     $script:Tenant = $null
     $script:ReqList  = Find-List $RequestsListUrl
     $script:ArchList = Find-List $ArchiveListUrl
@@ -169,8 +199,6 @@ function Connect-Main {
     $script:TrackerList = Find-List $TrackerListUrl
     if ($null -eq $script:TrackerList) { throw "List '$TrackerListUrl' not found." }
     $script:TrackerLoaded = $null
-    $me = Get-PnPProperty -ClientObject (Get-PnPWeb -Connection $script:Main) -Property CurrentUser -Connection $script:Main
-    $script:MyUserId = [int]$me.Id
     $script:SnapFields = @($SnapFields)
     $col = $null
     try { $col = Get-PnPField -List $script:ReqList -Identity 'RevokeAccessImmediately' -Connection $script:Main -ErrorAction SilentlyContinue } catch { $col = $null }
@@ -207,10 +235,10 @@ function Invoke-Spo {
 
 # Claims an item for this process. ETag (If-Match) makes the claim atomic:
 # if another server wrote the item between our read and our write, SharePoint returns 412.
-function Lock-Request([int]$Id) {
+function Lock-Request([int]$Id, [string]$SnapStatus) {
     $base = "$SiteUrl/_api/web/lists(guid'$($script:ReqListId)')/items($Id)"
     $r = $null
-    try { $r = Invoke-Spo -Method 'GET' -Url ($base + '?$select=LockOwner,LockExpires') }
+    try { $r = Invoke-Spo -Method 'GET' -Url ($base + '?$select=LockOwner,LockExpires,RequestStatus,NextAttempt,Modified,LastProcessed') }
     catch { if ((Get-HttpStatus $_) -eq 404) { return @{ State = 'Gone' } }; throw }
     $etag = $r.Headers['ETag']
     if ($etag -is [array]) { $etag = $etag[0] }
@@ -219,6 +247,9 @@ function Lock-Request([int]$Id) {
     $owner = [string]$j.LockOwner
     $exp = ConvertTo-Utc $j.LockExpires
     if ($owner -and $owner -ne $RunId -and $null -ne $exp -and $exp -gt [datetime]::UtcNow) { return @{ State = 'Busy' } }
+    # our list may be seconds old: another copy may already have finished or failed this request
+    if ([string]$j.RequestStatus -ne $SnapStatus) { return @{ State = 'Busy' } }
+    if (Test-RetryWaiting (ConvertTo-Utc $j.NextAttempt) (ConvertTo-Utc $j.Modified) (ConvertTo-Utc $j.LastProcessed) ([datetime]::UtcNow)) { return @{ State = 'Busy' } }
 
     $newExp = [datetime]::UtcNow.AddMinutes($LockMinutes).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", $inv)
     $body = @{ LockOwner = $RunId; LockExpires = $newExp } | ConvertTo-Json -Compress
@@ -270,8 +301,12 @@ function New-ResultValues {
 
 # ----- site collection admin (via the tenant admin site, so the script account need not own the site) -----
 function Get-Tenant {
+    if ($null -ne $script:TenantBuilt -and ((Get-Date) - $script:TenantBuilt).TotalMinutes -ge 30) {
+        $script:AdminCtx = New-AdminContext      # rebuilt from the main sign-in, which renews itself
+        $script:Tenant = $null
+    }
     if ($null -eq $script:Tenant) {
-        $ctx = $script:AdminConn.Context
+        $ctx = $script:AdminCtx
         $dir = Split-Path -Parent $ctx.GetType().Assembly.Location
         # Build the Tenant object from the assembly PnP itself loaded; a type from another
         # CSOM copy on the machine does not bind to PnP's context.
@@ -280,9 +315,10 @@ function Get-Tenant {
             if ($x.IsDynamic -or $x.GetName().Name -ne 'Microsoft.Online.SharePoint.Client.Tenant') { continue }
             if ((Split-Path -Parent $x.Location) -eq $dir) { $asm = $x; break }
         }
-        if ($null -eq $asm) { throw "Tenant CSOM assembly not found next to $dir." }
+        if ($null -eq $asm) { $asm = [Reflection.Assembly]::LoadFrom((Join-Path $dir 'Microsoft.Online.SharePoint.Client.Tenant.dll')) }
         $type = $asm.GetType('Microsoft.Online.SharePoint.TenantAdministration.Tenant')
         $script:Tenant = $type.GetConstructors()[0].Invoke(@($ctx.PSObject.BaseObject))
+        $script:TenantBuilt = Get-Date
     }
     return $script:Tenant
 }
@@ -291,7 +327,7 @@ function Set-SiteAdmin {
     param([string]$Url, [string]$Principal, [bool]$IsAdmin)
     $tenant = Get-Tenant
     [void]$tenant.SetSiteAdmin($Url.Trim().TrimEnd('/'), $Principal, $IsAdmin)
-    try { $script:AdminConn.Context.ExecuteQuery() }
+    try { $script:AdminCtx.ExecuteQuery() }
     catch {
         $m = $_.Exception.Message
         if ($m -match 'File Not Found') {
@@ -305,18 +341,26 @@ function Set-SiteAdmin {
     return 'removed'
 }
 
-# Another active request for the same site and group must keep the group as admin.
-# Requests that are themselves due for removal do not count.
+# Another request for the same site and group must keep the group as admin: one already granted,
+# or one about to be granted. Read fresh, not from the cycle's list, because other copies may have
+# changed requests since. Requests that are themselves due for removal do not count.
 function Find-OtherActiveRequest {
-    param($Items, [int]$SelfId, [string]$SiteKey, [string]$Principal, [datetime]$NowUtc)
-    foreach ($o in $Items) {
+    param([int]$SelfId, [string]$SiteKey, [string]$Principal, [datetime]$NowUtc)
+    $items = @(Get-PnPListItem -List $script:ReqList -PageSize $PageSize -Fields $script:SnapFields -Connection $script:Main)
+    foreach ($o in $items) {
         if ([int]$o.Id -eq $SelfId) { continue }
         $f = $o.FieldValues
-        if ([string](Get-FieldValue $f 'RequestStatus') -ne 'Access Granted') { continue }
-        $end = ConvertTo-Utc (Get-FieldValue $f 'AccessEndDate')
-        if ($null -ne $end -and $end -le $NowUtc) { continue }
         if ($true -eq (Get-FieldValue $f 'RevokeAccessImmediately')) { continue }
         if ((Get-SiteKey (Get-LookupText (Get-FieldValue $f 'SiteUrl'))) -ne $SiteKey) { continue }
+        $status = [string](Get-FieldValue $f 'RequestStatus')
+        if ($status -eq 'Pending Access Grant') {
+            $start = ConvertTo-Utc (Get-FieldValue $f 'AccessStartDate')
+            if ($Principal -eq $GroupClaim -and ($null -eq $start -or $start -le $NowUtc)) { return [int]$o.Id }
+            continue
+        }
+        if ($status -ne 'Access Granted') { continue }
+        $end = ConvertTo-Utc (Get-FieldValue $f 'AccessEndDate')
+        if ($null -ne $end -and $end -le $NowUtc) { continue }
         $p = [string](Get-FieldValue $f 'GrantedPrincipal')
         if (-not $p) { $p = $GroupClaim }
         if ($p -eq $Principal) { return [int]$o.Id }
@@ -403,9 +447,9 @@ function Copy-ToArchive {
 
 # ----- one request -----
 function Invoke-Request {
-    param($Snap, $Items)
+    param($Snap)
     $id = [int]$Snap.Id
-    $lock = Lock-Request $id
+    $lock = Lock-Request $id ([string](Get-FieldValue $Snap.FieldValues 'RequestStatus'))
     if ($lock.State -ne 'Locked') { return $lock.State }
     $fv = $null
     $action = ''
@@ -438,7 +482,7 @@ function Invoke-Request {
             if (-not $principal) {
                 $msg = 'Access was never granted; nothing to remove.'
             } else {
-                $other = Find-OtherActiveRequest -Items $Items -SelfId $id -SiteKey (Get-SiteKey $site) -Principal $principal -NowUtc $now
+                $other = Find-OtherActiveRequest -SelfId $id -SiteKey (Get-SiteKey $site) -Principal $principal -NowUtc $now
                 if ($other -gt 0) {
                     $msg = "Kept site admin on $site - still needed by request #$other"
                 } else {
@@ -498,13 +542,7 @@ function Invoke-Cycle {
         if ($a -eq 'Scheduled') { $stat['Scheduled'] += 1; continue }
         if (-not $a) { continue }
         $next = ConvertTo-Utc (Get-FieldValue $fv 'NextAttempt')
-        if ($null -ne $next -and $next -gt $now) {
-            # edited by someone other than this script's account since it failed (e.g. a corrected Site URL): retry now
-            $ed = Get-FieldValue $fv 'Editor'
-            $edId = 0
-            if ($null -ne $ed) { $edId = [int]$ed.LookupId }
-            if ($edId -eq $script:MyUserId) { $stat['Waiting'] += 1; continue }
-        }
+        if (Test-RetryWaiting $next (ConvertTo-Utc (Get-FieldValue $fv 'Modified')) (ConvertTo-Utc (Get-FieldValue $fv 'LastProcessed')) $now) { $stat['Waiting'] += 1; continue }
         $owner = [string](Get-FieldValue $fv 'LockOwner')
         $lockExp = ConvertTo-Utc (Get-FieldValue $fv 'LockExpires')
         if ($owner -and $owner -ne $RunId -and $null -ne $lockExp -and $lockExp -gt $now) { $stat['Busy'] += 1; continue }
@@ -515,7 +553,7 @@ function Invoke-Cycle {
     $order = $due.ToArray()
     if ($order.Count -gt 1) { $order = @($order | Get-Random -Count $order.Count) }
     for ($i = 0; $i -lt $order.Count; $i++) {
-        $r = Invoke-Request -Snap $order[$i] -Items $items
+        $r = Invoke-Request -Snap $order[$i]
         if ($r -eq 'Done')   { $stat['Done'] += 1 }
         if ($r -eq 'Failed') { $stat['Failed'] += 1 }
         if ($r -eq 'Busy')   { $stat['Busy'] += 1 }
